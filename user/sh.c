@@ -313,8 +313,7 @@ main(int argc, char* argv[])
         runcmd(cmd_parsed);
       } else {
         // Parent process - wait for foreground job
-        int status;
-        int child_pid = wait(&status);
+        wait(0);
         // After waiting, reap any background jobs
         reap_background_jobs();
       }
