@@ -3,6 +3,7 @@
 #include "kernel/types.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/param.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -12,6 +13,9 @@
 #define BACK  5
 
 #define MAXARGS 10
+
+// Array to track background job PIDs
+int jobs[NPROC];
 
 struct cmd {
   int type;
@@ -124,11 +128,59 @@ runcmd(struct cmd *cmd)
 
   case BACK:
     bcmd = (struct backcmd*)cmd;
-    if(fork1() == 0)
-      runcmd(bcmd->cmd);
+    // Don't fork here - parent already forked in main
+    runcmd(bcmd->cmd);
     break;
   }
   exit(0);
+}
+
+// Add a background job to the jobs array
+void
+add_job(int pid)
+{
+  for(int i = 0; i < NPROC; i++){
+    if(jobs[i] == 0){
+      jobs[i] = pid;
+      return;
+    }
+  }
+}
+
+// Remove a background job from the jobs array
+void
+remove_job(int pid)
+{
+  for(int i = 0; i < NPROC; i++){
+    if(jobs[i] == pid){
+      jobs[i] = 0;
+      return;
+    }
+  }
+}
+
+// Check if a PID is a background job
+int
+is_background_job(int pid)
+{
+  for(int i = 0; i < NPROC; i++){
+    if(jobs[i] == pid){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// Reap any finished background jobs
+void
+reap_background_jobs(void)
+{
+  int status;
+  int pid;
+  while((pid = wait_noblock(&status)) > 0){
+    remove_job(pid);
+    printf("[bg %d] exited with status %d\n", pid, status);
+  }
 }
 
 int
@@ -143,10 +195,16 @@ getcmd(char *buf, int nbuf)
 }
 
 int
-main(void)
+main(int argc, char* argv[])
 {
   static char buf[100];
   int fd;
+  int input_fd = 0; // 0 for stdin (interactive), file descriptor for script
+
+  // Initialize jobs array
+  for(int i = 0; i < NPROC; i++){
+    jobs[i] = 0;
+  }
 
   // Ensure that three file descriptors are open.
   while((fd = open("console", O_RDWR)) >= 0){
@@ -156,19 +214,102 @@ main(void)
     }
   }
 
+  // If script file is provided, open it
+  if(argc > 1){
+    input_fd = open(argv[1], O_RDONLY);
+    if(input_fd < 0){
+      fprintf(2, "sh: cannot open %s\n", argv[1]);
+      exit(1);
+    }
+  }
+
   // Read and run input commands.
-  while(getcmd(buf, sizeof(buf)) >= 0){
-    if(buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' '){
+  while(1){
+    char *line;
+    int n;
+    
+    // Read command
+    if(input_fd == 0){
+      // Interactive mode - use getcmd
+      if(getcmd(buf, sizeof(buf)) < 0)
+        break;
+      line = buf;
+    } else {
+      // Script mode - read line from file
+      memset(buf, 0, sizeof(buf));
+      n = 0;
+      while(n < sizeof(buf) - 1){
+        if(read(input_fd, buf + n, 1) != 1)
+          goto script_done;
+        if(buf[n] == '\n'){
+          buf[n] = 0;
+          break;
+        }
+        n++;
+      }
+      if(n == 0)
+        goto script_done;
+      line = buf;
+    }
+    
+    // Reap any background jobs that have finished
+    reap_background_jobs();
+    
+    // Handle cd command
+    if(line[0] == 'c' && line[1] == 'd' && line[2] == ' '){
       // Chdir must be called by the parent, not the child.
-      buf[strlen(buf)-1] = 0;  // chop \n
-      if(chdir(buf+3) < 0)
-        fprintf(2, "cannot cd %s\n", buf+3);
+      int len = strlen(line);
+      if(len > 0 && line[len-1] == '\n')
+        line[len-1] = 0;  // chop \n
+      if(chdir(line+3) < 0)
+        fprintf(2, "cannot cd %s\n", line+3);
       continue;
     }
-    if(fork1() == 0)
-      runcmd(parsecmd(buf));
-    wait(0);
+    
+    // Handle jobs command
+    if(line[0] == 'j' && line[1] == 'o' && line[2] == 'b' && line[3] == 's' && 
+       (line[4] == '\n' || line[4] == 0)){
+      for(int i = 0; i < NPROC; i++){
+        if(jobs[i] != 0){
+          printf("%d\n", jobs[i]);
+        }
+      }
+      continue;
+    }
+    
+    // Parse and check if it's a background command
+    struct cmd *cmd_parsed = parsecmd(line);
+    
+    if(cmd_parsed->type == BACK){
+      // Background job - fork once and don't wait
+      int pid = fork1();
+      if(pid == 0){
+        // Child process
+        runcmd(cmd_parsed);
+      } else {
+        // Parent process
+        printf("[%d]\n", pid);
+        add_job(pid);
+      }
+    } else {
+      // Foreground job - fork and wait
+      int pid = fork1();
+      if(pid == 0){
+        // Child process
+        runcmd(cmd_parsed);
+      } else {
+        // Parent process - wait for foreground job
+        int status;
+        int child_pid = wait(&status);
+        // After waiting, reap any background jobs
+        reap_background_jobs();
+      }
+    }
   }
+
+script_done:
+  if(input_fd != 0)
+    close(input_fd);
   exit(0);
 }
 
