@@ -178,14 +178,20 @@ reap_background_jobs(void)
   int status;
   int pid;
   while((pid = wait_noblock(&status)) > 0){
-    remove_job(pid);
-    printf("[bg %d] exited with status %d\n", pid, status);
+    // Only report if it's a background job
+    if(is_background_job(pid)){
+      remove_job(pid);
+      printf("[bg %d] exited with status %d\n", pid, status);
+    }
   }
 }
 
 int
 getcmd(char *buf, int nbuf)
 {
+  // Reap any background jobs before printing prompt
+  reap_background_jobs();
+  
   write(2, "$ ", 2);
   memset(buf, 0, nbuf);
   gets(buf, nbuf);
@@ -247,8 +253,8 @@ main(int argc, char* argv[])
         }
         n++;
       }
-      if(n == 0)
-        goto script_done;
+      if(n == 0 && buf[0] == 0)
+        continue; // Empty line, skip it
       line = buf;
     }
     
