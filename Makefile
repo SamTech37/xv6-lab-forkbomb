@@ -181,4 +181,4 @@ qemu-gdb: $K/kernel .gdbinit fs.img
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
 print-gdbport:
-	echo 26000
+	@echo $(GDBPORT)
