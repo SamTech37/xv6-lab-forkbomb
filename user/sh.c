@@ -245,8 +245,16 @@ main(int argc, char* argv[])
       memset(buf, 0, sizeof(buf));
       n = 0;
       while(n < sizeof(buf) - 1){
-        if(read(input_fd, buf + n, 1) != 1)
+        int bytes_read = read(input_fd, buf + n, 1);
+        if(bytes_read != 1){
+          // EOF or error
+          if(n > 0){
+            // We have a partial line without newline - process it
+            buf[n] = 0;
+            break;
+          }
           goto script_done;
+        }
         if(buf[n] == '\n'){
           buf[n] = 0;
           break;
