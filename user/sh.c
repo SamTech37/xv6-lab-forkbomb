@@ -304,6 +304,8 @@ main(int argc, char* argv[])
         // Parent process
         printf("[%d]\n", pid);
         add_job(pid);
+        // Give background job a moment to start and print any immediate output
+        sleep(1);
       }
     } else {
       // Foreground job - fork and wait
@@ -312,9 +314,17 @@ main(int argc, char* argv[])
         // Child process
         runcmd(cmd_parsed);
       } else {
-        // Parent process - wait for foreground job
-        wait(0);
-        // After waiting, reap any background jobs
+        // Parent process - wait for THIS specific foreground job
+        // Keep calling wait until we get the right PID
+        int waited_pid;
+        while((waited_pid = wait(0)) != pid){
+          // We reaped a background job instead
+          if(waited_pid > 0 && is_background_job(waited_pid)){
+            remove_job(waited_pid);
+            printf("[bg %d] exited with status 0\n", waited_pid);
+          }
+        }
+        // Now reap any remaining background jobs
         reap_background_jobs();
       }
     }
