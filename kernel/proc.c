@@ -434,6 +434,45 @@ wait(uint64 addr)
   }
 }
 
+// Non-blocking wait for a child process to exit.
+// Returns pid of zombie child if found, 0 if no zombie child.
+int
+wait_noblock(uint64 exit_status)
+{
+  struct proc *pp;
+  int pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  // Scan through table looking for zombie children.
+  for(pp = proc; pp < &proc[NPROC]; pp++){
+    if(pp->parent == p){
+      // make sure the child isn't still in exit() or swtch().
+      acquire(&pp->lock);
+      
+      if(pp->state == ZOMBIE){
+        // Found one.
+        pid = pp->pid;
+        if(exit_status != 0 && copyout(p->pagetable, exit_status, (char *)&pp->xstate,
+                                sizeof(pp->xstate)) < 0) {
+          release(&pp->lock);
+          release(&wait_lock);
+          return -1;
+        }
+        freeproc(pp);
+        release(&pp->lock);
+        release(&wait_lock);
+        return pid;
+      }
+      release(&pp->lock);
+    }
+  }
+
+  release(&wait_lock);
+  return 0; // no zombie child
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
